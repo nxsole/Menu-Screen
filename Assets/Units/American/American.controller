@@ -305,7 +305,7 @@ AnimatorState:
   m_TimeParameter: 
 --- !u!1107 &-3212647380951033753
 AnimatorStateMachine:
-  serializedVersion: 7
+  serializedVersion: 6
   m_ObjectHideFlags: 1
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
@@ -498,7 +498,7 @@ AnimatorController:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: American
-  serializedVersion: 6
+  serializedVersion: 5
   m_AnimatorParameters:
   - m_Name: Idle
     m_Type: 4
@@ -546,10 +546,9 @@ AnimatorController:
     m_BlendingMode: 0
     m_SyncedLayerIndex: -1
     m_DefaultWeight: 0
-    m_IKPass: 0
+    m_IKPass: 1
     m_SyncedLayerAffectsTiming: 0
     m_Controller: {fileID: 9100000}
-  m_EvaluateTransitionsOnStart: 1
 --- !u!1101 &969324201807408111
 AnimatorStateTransition:
   m_ObjectHideFlags: 1
