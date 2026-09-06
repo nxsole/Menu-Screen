@@ -17,6 +17,10 @@ namespace TiradPass
         public Transform cameraTarget;
         public AudioClip voiceClip;
         public float delayAfterLine;
+
+        [Header("Custom Camera Speed (0 = Use Default)")]
+        public float customMoveSpeed;
+        public float customRotateSpeed;
     }
 
     public class TiradPassIntroCutscene : MonoBehaviour
@@ -30,6 +34,10 @@ namespace TiradPass
         [SerializeField] private CanvasGroup screenFadeCanvasGroup;
         [SerializeField] private Button skipButton;
 
+        [Header("Camera Movement Settings")]
+        [SerializeField] private float cameraMoveSpeed = 2.0f;
+        [SerializeField] private float cameraRotateSpeed = 2.0f;
+
         [Header("Audio Sources")]
         [SerializeField] private AudioSource mainMenuMusicSource;
         [SerializeField] private AudioSource campfireAudioSource;
@@ -37,9 +45,7 @@ namespace TiradPass
         [SerializeField] private AudioSource dialogueVoiceSource;
         [SerializeField] private float audioFadeDuration = 1.5f;
 
-        [Header("Camera Transition Settings")]
-        [SerializeField] private float cameraMoveSpeed = 2.5f;
-        [SerializeField] private float cameraRotateSpeed = 2.5f;
+        [Header("Dialogue Timing Settings")]
         [SerializeField] private float textTypingSpeed = 0.035f;
 
         [Header("Scene Transition")]
@@ -47,6 +53,7 @@ namespace TiradPass
         [SerializeField] private float fadeDuration = 1.5f;
 
         [Header("Camera Targets")]
+        [SerializeField] private Transform mainMenuCamTarget;
         [SerializeField] private Transform goyoCamTarget;
         [SerializeField] private Transform sundalo1CamTarget;
         [SerializeField] private Transform sundalo2CamTarget;
@@ -55,7 +62,9 @@ namespace TiradPass
         [Header("Dialogue Sequence")]
         [SerializeField] private List<DialogueLine> dialogueSequence = new List<DialogueLine>();
 
-        private Transform currentCamTarget;
+        private Transform currentCameraTarget;
+        private float currentMoveSpeed;
+        private float currentRotateSpeed;
         private Coroutine typingCoroutine;
         private bool isSkipping = false;
         private bool isCutsceneActive = false;
@@ -72,18 +81,38 @@ namespace TiradPass
             if (dialogueCanvasGroup != null)
                 dialogueCanvasGroup.alpha = 0f;
 
-            if (mainCamera != null && wideShotCamTarget != null)
+            currentCameraTarget = mainMenuCamTarget != null ? mainMenuCamTarget : wideShotCamTarget;
+            currentMoveSpeed = cameraMoveSpeed;
+            currentRotateSpeed = cameraRotateSpeed;
+
+            if (mainCamera != null && currentCameraTarget != null)
             {
-                mainCamera.transform.position = wideShotCamTarget.position;
-                mainCamera.transform.rotation = wideShotCamTarget.rotation;
-                currentCamTarget = wideShotCamTarget;
+                mainCamera.transform.position = currentCameraTarget.position;
+                mainCamera.transform.rotation = currentCameraTarget.rotation;
             }
 
             if (campfireAudioSource != null) { campfireAudioSource.volume = 0f; campfireAudioSource.loop = true; }
             if (nightAmbienceAudioSource != null) { nightAmbienceAudioSource.volume = 0f; nightAmbienceAudioSource.loop = true; }
         }
 
-        // Right-click the component header in Unity Inspector to run this auto-fill function!
+        private void Update()
+        {
+            if (mainCamera != null && currentCameraTarget != null)
+            {
+                mainCamera.transform.position = Vector3.Lerp(
+                    mainCamera.transform.position,
+                    currentCameraTarget.position,
+                    Time.deltaTime * currentMoveSpeed
+                );
+
+                mainCamera.transform.rotation = Quaternion.Slerp(
+                    mainCamera.transform.rotation,
+                    currentCameraTarget.rotation,
+                    Time.deltaTime * currentRotateSpeed
+                );
+            }
+        }
+
         [ContextMenu("Auto-Fill Dialogue Data")]
         public void AutoFillDialogueData()
         {
@@ -102,7 +131,8 @@ namespace TiradPass
                 new DialogueLine { speakerName = "SUNDALO 2", speakerColor = colorSundalo2, dialogueText = "Kung ganoon, magpahinga na tayo habang may oras pa.", cameraTarget = sundalo2CamTarget, delayAfterLine = 1.0f },
                 new DialogueLine { speakerName = "GOYO", speakerColor = colorGoyo, dialogueText = "Oo. Pagkatapos nito, aalis tayo. Maghanda kayo.", cameraTarget = goyoCamTarget, delayAfterLine = 1.0f },
                 new DialogueLine { speakerName = "SUNDALO 1", speakerColor = colorSundalo1, dialogueText = "Naiintindihan namin, Goyo.", cameraTarget = sundalo1CamTarget, delayAfterLine = 1.0f },
-                new DialogueLine { speakerName = "GOYO", speakerColor = colorGoyo, dialogueText = "Sa dilim man tayo maglakbay, makakarating tayo sa dulo. Walang maiiwan.", cameraTarget = wideShotCamTarget, delayAfterLine = 1.5f }
+                // Final line: customMoveSpeed set to 0.3f for a slow, cinematic zoom-out
+                new DialogueLine { speakerName = "GOYO", speakerColor = colorGoyo, dialogueText = "Sa dilim man tayo maglakbay, makakarating tayo sa dulo. Walang maiiwan.", cameraTarget = wideShotCamTarget, delayAfterLine = 2.5f, customMoveSpeed = 0.3f, customRotateSpeed = 0.3f }
             };
 
             Debug.Log("Dialogue Sequence Auto-Filled Successfully!");
@@ -113,26 +143,6 @@ namespace TiradPass
             if (isCutsceneActive) return;
             isCutsceneActive = true;
             StartCoroutine(RunIntroCutsceneFlow());
-        }
-
-        private void Update()
-        {
-            if (!isCutsceneActive) return;
-
-            if (currentCamTarget != null && mainCamera != null)
-            {
-                mainCamera.transform.position = Vector3.Lerp(
-                    mainCamera.transform.position,
-                    currentCamTarget.position,
-                    Time.deltaTime * cameraMoveSpeed
-                );
-
-                mainCamera.transform.rotation = Quaternion.Slerp(
-                    mainCamera.transform.rotation,
-                    currentCamTarget.rotation,
-                    Time.deltaTime * cameraRotateSpeed
-                );
-            }
         }
 
         private IEnumerator RunIntroCutsceneFlow()
@@ -158,10 +168,11 @@ namespace TiradPass
 
                 DialogueLine line = dialogueSequence[i];
 
-                if (line.cameraTarget != null)
-                {
-                    currentCamTarget = line.cameraTarget;
-                }
+                currentCameraTarget = line.cameraTarget;
+
+                // Apply custom speed if set, otherwise use default
+                currentMoveSpeed = line.customMoveSpeed > 0 ? line.customMoveSpeed : cameraMoveSpeed;
+                currentRotateSpeed = line.customRotateSpeed > 0 ? line.customRotateSpeed : cameraRotateSpeed;
 
                 if (speakerNameText != null)
                 {
