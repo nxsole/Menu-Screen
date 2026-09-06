@@ -30,6 +30,10 @@ public class FirstPersonController : MonoBehaviour
 
     [Header("References")]
     [SerializeField] private Transform playerCamera;
+    // The camera this controller actually drives. The win sequence pans THIS one rather than
+    // guessing via Camera.main, which may be a different object if the player cam isn't tagged
+    // MainCamera - that mismatch is a classic "camera won't pan" cause.
+    public Transform PlayerCamera => playerCamera;
     [SerializeField] private Animator weaponAnimator;
     [SerializeField] private AudioSource audioSource;
 

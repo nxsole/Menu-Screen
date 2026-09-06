@@ -9,7 +9,10 @@ public class EnemyAI : MonoBehaviour
     private enum State { Idle, Aim, Fire, Kneel, Reposition, Investigate, Search, TakeCover, PlayerOrder }
 
     [Header("Detection")]
-    [SerializeField] private string targetTag = "Ally";
+    [Tooltip("Tags this unit treats as enemies. A unit is hostile if it carries ANY of these tags. " +
+        "e.g. an Ally-tagged soldier with targetTags = [Enemy] fights enemies; set multiple to treat " +
+        "several factions as hostile at once.")]
+    [SerializeField] private string[] targetTags = { "Ally" };
     [SerializeField] private float detectionRadius = 40f;
     [SerializeField] private float fieldOfViewAngle = 120f;
     [SerializeField] private LayerMask lineOfSightBlockers;
@@ -85,7 +88,7 @@ public class EnemyAI : MonoBehaviour
     [SerializeField] private float coverArrivalDistance = 0.75f;
 
     [Header("Player Move Orders")]
-    [Tooltip("Reused for both teams via targetTag: if any unit tagged as our target-tag is within this radius of the ordered point, the point counts as contested and we hold at optimalCombatRange from the nearest one instead of walking in.")]
+    [Tooltip("Reused for both teams via targetTags: if any unit carrying one of our target tags is within this radius of the ordered point, the point counts as contested and we hold at optimalCombatRange from the nearest one instead of walking in.")]
     [SerializeField] private float orderContestedCheckRadius = 12f;
     [SerializeField] private float orderRecheckInterval = 0.75f;
     [SerializeField] private float orderArrivalDistance = 1f;
@@ -103,6 +106,32 @@ public class EnemyAI : MonoBehaviour
     [SerializeField] private float standingColliderCenterY = 0.9f;
     [SerializeField] private float crouchedColliderCenterY = 0.6f;
 
+    [Header("Enemy Spotted Audio")]
+    [Tooltip("Played the FIRST time any allied troop (units sharing this one's tag) spots an enemy. Fires once for the whole squad, not per-unit. Leave empty for no bark.")]
+    [SerializeField] private AudioClip[] enemySpottedSounds;
+    [SerializeField, Range(0f, 1f)] private float enemySpottedVolume = 1f;
+    [Tooltip("Only units with this tag trigger/hear the spotted bark. Set to your ally tag so enemies spotting the player don't fire it.")]
+    [SerializeField] private string spottedAudioTag = "Ally";
+
+    [Header("Battle Cry Audio")]
+    [Tooltip("Squad-wide cry played once, right after the enemy-spotted bark, to answer it when the fight begins. Fires once for the squad. Leave empty to skip.")]
+    [SerializeField] private AudioClip[] battleCryReplySounds;
+    [Tooltip("Extra gap (seconds) added AFTER the triggering clip finishes before the squad reply cry plays. The reply now waits for the spotted clip to actually end, then waits this much longer.")]
+    [SerializeField] private float battleCryReplyDelay = 0.2f;
+    [Tooltip("Reply cries make EVERY ally shout. This is the max extra random delay (seconds) each unit adds, so voices scatter across a short window instead of hitting in perfect unison (which sounds like one flanged clip, not a crowd). ~0.3-0.6 reads as a natural ragged chorus.")]
+    [SerializeField] private float replyCryMaxStagger = 0.4f;
+    [Tooltip("Random pitch shift (+/-) applied per voice so the same clips sound like different people. ~0.1 is subtle, ~0.2 is noticeably varied.")]
+    [SerializeField, Range(0f, 0.5f)] private float replyCryPitchVariation = 0.12f;
+    [Tooltip("Occasional individual cries while a unit is in active combat. Each unit rolls independently on a cooldown. Leave empty to skip.")]
+    [SerializeField] private AudioClip[] battleCryCombatSounds;
+    [SerializeField, Range(0f, 1f)] private float battleCryVolume = 1f;
+    [Tooltip("Minimum seconds between one unit's individual combat cries.")]
+    [SerializeField] private float battleCryMinInterval = 6f;
+    [Tooltip("Maximum seconds between one unit's individual combat cries.")]
+    [SerializeField] private float battleCryMaxInterval = 14f;
+    [Tooltip("Chance (0-1) that an eligible cry actually plays when its cooldown elapses, so cries feel sporadic rather than metronomic.")]
+    [SerializeField, Range(0f, 1f)] private float battleCryChance = 0.6f;
+
     [Header("Death / Ragdoll")]
     [SerializeField] private float ragdollDisappearDelay = 10f;
     [SerializeField] private AudioClip[] deathSounds;
@@ -112,6 +141,13 @@ public class EnemyAI : MonoBehaviour
         "with the Player and NPC layers (keep it checked against ground/environment layers so " +
         "the ragdoll still settles onto the floor).")]
     [SerializeField] private string corpseLayerName = "Corpse";
+    [Tooltip("Seconds after death to let the ragdoll flop and settle on the ground before ALL its " +
+        "colliders are disabled. After this, the corpse has no colliders at all (it just rests as " +
+        "visual mesh). Keep it under the ragdoll disappear delay. Set to 0 to disable colliders " +
+        "instantly on death (the body may sink through the floor).")]
+    [SerializeField] private float corpseColliderSettleDelay = 3f;
+    [Tooltip("Logs a one-time report on death showing whether the Corpse layer and Physics collision matrix are set up so corpses pass through living units. Turn off once confirmed working.")]
+    [SerializeField] private bool corpseSetupDiagnostics = true;
 
     [Header("Animator State Names")]
     [SerializeField] private string idleStateName = "Idle";
@@ -139,10 +175,18 @@ public class EnemyAI : MonoBehaviour
     private Vector3 lastKnownPosition = Vector3.zero;
     private Vector3 pendingCoverDestination;
 
+    private float nextBattleCryTime = -Mathf.Infinity; // per-unit cooldown gate for individual combat cries
+
     private bool hasOrder;
     private bool orderIsFresh; // true only from when an order arrives until the unit first acts on it
     private bool orderCrouchWalk; // stance chosen once per order: true = crouch-walk, false = stand
     private Vector3 orderPoint;
+
+    // True while a move order is being carried out. AllyPathFollower watches this: when it flips
+    // back to false the unit has arrived at the current waypoint, so the follower issues the next.
+    // Note it stays true while the unit peels off to fight (EnemyAI resumes the order after
+    // combat), so the follower correctly waits through fights rather than skipping a waypoint.
+    public bool HasActiveOrder => hasOrder;
 
     // Golden angle in radians - the Vogel/sunflower spiral constant. Placing point i at
     // radius = spacing * sqrt(i) and angle = i * goldenAngle gives an even spread with a
@@ -151,6 +195,35 @@ public class EnemyAI : MonoBehaviour
     private const float GoldenAngle = 2.39996323f;
 
     private static readonly System.Collections.Generic.List<EnemyAI> ActiveEnemies = new System.Collections.Generic.List<EnemyAI>();
+
+    // Fired whenever any unit dies, AFTER it's removed from ActiveEnemies (so counts are accurate
+    // when handlers run). The argument is the tag of the unit that died. GameOutcomeManager
+    // subscribes to this to detect when the last ally has fallen.
+    public static event System.Action<string> OnAnyUnitDied;
+
+    // Number of living units currently carrying the given tag. Used by the outcome manager to
+    // check whether any allies remain.
+    public static int CountLivingWithTag(string tag)
+    {
+        int n = 0;
+        foreach (var u in ActiveEnemies)
+        {
+            if (u != null && !u.isDead && u.CompareTag(tag)) n++;
+        }
+        return n;
+    }
+
+    // Tracks, per tag, whether that side has already played its "enemy spotted" bark, so the
+    // whole squad only shouts once rather than every unit firing on the same frame. Keyed by tag
+    // so allies and enemies (if you ever give enemies a bark too) track independently.
+    private static readonly System.Collections.Generic.Dictionary<string, bool> SpottedBarkPlayed = new System.Collections.Generic.Dictionary<string, bool>();
+
+    // Per-tag flag for the one-time squad reply cry that answers the spotted bark when a fight begins.
+    private static readonly System.Collections.Generic.Dictionary<string, bool> ReplyCryPlayed = new System.Collections.Generic.Dictionary<string, bool>();
+
+    // Per-tag flag for the one-time reply cry that answers the start-of-scene move clip. Separate
+    // from ReplyCryPlayed so the two cries are independent - one firing never consumes the other.
+    private static readonly System.Collections.Generic.Dictionary<string, bool> StartReplyCryPlayed = new System.Collections.Generic.Dictionary<string, bool>();
 
     private static readonly int HashIdle = Animator.StringToHash("Idle");
     private static readonly int HashAiming = Animator.StringToHash("Aiming");
@@ -198,6 +271,21 @@ public class EnemyAI : MonoBehaviour
 
     private void OnEnable()
     {
+        // Statics survive editor Play sessions, so clear this tag's spotted flag when the first
+        // unit of that tag registers (no other same-tag unit active yet = fresh scene). Without
+        // this, the bark would only ever play on the first playthrough after a domain reload.
+        bool anySameTagActive = false;
+        foreach (var other in ActiveEnemies)
+        {
+            if (other != null && other != this && other.CompareTag(gameObject.tag)) { anySameTagActive = true; break; }
+        }
+        if (!anySameTagActive)
+        {
+            SpottedBarkPlayed[gameObject.tag] = false;
+            ReplyCryPlayed[gameObject.tag] = false;
+            StartReplyCryPlayed[gameObject.tag] = false;
+        }
+
         ActiveEnemies.Add(this);
         behaviorRoutine = StartCoroutine(BehaviorLoop());
     }
@@ -343,6 +431,7 @@ public class EnemyAI : MonoBehaviour
             currentTarget = FindTarget();
             if (currentTarget != null)
             {
+                NotifyEnemySpotted();
                 BroadcastAlert(currentTarget);
                 ClearAlert();
                 state = State.Aim;
@@ -389,6 +478,8 @@ public class EnemyAI : MonoBehaviour
 
         animator.SetBool(HashIdle, false);
         animator.SetBool(HashAiming, true);
+
+        TryPlayCombatBattleCry(); // sporadic individual cry while actively engaging (self-cooldowns)
 
         isCrouchedStance = DetermineCrouchStance();
         SetCrouching(isCrouchedStance);
@@ -749,7 +840,7 @@ public class EnemyAI : MonoBehaviour
 
     // Executes a standing player move order: walk toward orderPoint, spread out in a
     // formation with squadmates heading to the same point, and hold at optimalCombatRange
-    // instead of walking in if the point is contested by targetTag-tagged opponents.
+    // instead of walking in if the point is contested by units carrying one of our target tags.
     // Combat still takes priority - TryAcquireDirectSight() below hands off to Aim exactly
     // like Investigate/Search do, and every "no target" fallback elsewhere in this file
     // already routes back into PlayerOrder (instead of Search/Idle) as long as hasOrder
@@ -878,7 +969,7 @@ public class EnemyAI : MonoBehaviour
 
         foreach (var hit in hits)
         {
-            if (!hit.CompareTag(targetTag)) continue;
+            if (!IsHostile(hit)) continue;
             float d = Vector3.SqrMagnitude(hit.transform.position - point);
             if (d < bestDist)
             {
@@ -1095,9 +1186,124 @@ public class EnemyAI : MonoBehaviour
         currentTarget = found;
         animator.SetBool(HashWalking, false);
         ClearAlert();
+        NotifyEnemySpotted();
         BroadcastAlert(currentTarget);
         state = State.Aim;
         return true;
+    }
+
+    // Plays the "enemy spotted" bark the first time anyone on this unit's side sees a target.
+    // Guarded by a per-tag static flag so it fires once for the whole squad, not per unit.
+    private void NotifyEnemySpotted()
+    {
+        if (!CompareTag(spottedAudioTag)) return; // only the intended side barks
+        if (enemySpottedSounds == null || enemySpottedSounds.Length == 0) return;
+
+        if (SpottedBarkPlayed.TryGetValue(spottedAudioTag, out bool already) && already) return;
+        SpottedBarkPlayed[spottedAudioTag] = true;
+
+        AudioClip clip = enemySpottedSounds[Random.Range(0, enemySpottedSounds.Length)];
+        if (clip == null) return;
+
+        // Play at the spotting unit's position. Uses the shared AudioSource if present, else a
+        // one-shot at the unit's location so it still works on units without an AudioSource.
+        if (audioSource != null) audioSource.PlayOneShot(clip, enemySpottedVolume);
+        else AudioSource.PlayClipAtPoint(clip, transform.position, enemySpottedVolume);
+
+        // Kick off the one-time squad reply cry, timed to land right after this spotted clip ends.
+        TriggerSpottedReplyCry(clip.length);
+    }
+
+    // Reply cry that answers the enemy-spotted bark. Triggered once per side (so it doesn't
+    // re-fire per unit), but that single trigger makes EVERY ally cry - each with its own random
+    // clip, a small random delay, and a slight pitch shift - so it sounds like a whole squad
+    // shouting rather than one voice. Timed to start right after the spotted clip ends.
+    private void TriggerSpottedReplyCry(float afterClipLength)
+    {
+        if (battleCryReplySounds == null || battleCryReplySounds.Length == 0) return;
+        if (ReplyCryPlayed.TryGetValue(spottedAudioTag, out bool already) && already) return;
+        ReplyCryPlayed[spottedAudioTag] = true;
+
+        BroadcastReplyCry(afterClipLength + battleCryReplyDelay);
+    }
+
+    // Public: called by AllyPathFollower once the start-of-scene move clip finishes, so the squad
+    // answers it too. Independent one-time flag, so it never blocks (or is blocked by) the spotted
+    // reply.
+    public void PlayStartReplyCry(float extraDelay = 0f)
+    {
+        if (battleCryReplySounds == null || battleCryReplySounds.Length == 0) return;
+        if (!CompareTag(spottedAudioTag)) return;
+        if (StartReplyCryPlayed.TryGetValue(spottedAudioTag, out bool already) && already) return;
+        StartReplyCryPlayed[spottedAudioTag] = true;
+
+        BroadcastReplyCry(extraDelay);
+    }
+
+    // Tells every living ally on this side to cry out. Each unit staggers its own start slightly
+    // and randomizes clip + pitch, turning one trigger into a chorus of distinct voices.
+    private void BroadcastReplyCry(float baseDelay)
+    {
+        foreach (var other in ActiveEnemies)
+        {
+            if (other == null) continue;
+            if (!other.CompareTag(spottedAudioTag)) continue;
+            other.StartCoroutine(other.ReplyCryRoutine(baseDelay));
+        }
+    }
+
+    private System.Collections.IEnumerator ReplyCryRoutine(float delay)
+    {
+        // Per-unit random stagger on top of the shared base delay, so voices don't all hit on the
+        // exact same frame (perfect unison sounds like one flanged clip, not a crowd).
+        float stagger = Random.Range(0f, replyCryMaxStagger);
+        float total = delay + stagger;
+        if (total > 0f) yield return new WaitForSeconds(total);
+
+        AudioClip clip = battleCryReplySounds[Random.Range(0, battleCryReplySounds.Length)];
+        if (clip == null) yield break;
+
+        PlayVoiceWithPitchVariation(clip, battleCryVolume);
+    }
+
+    // Plays a clip with a randomized pitch so repeated/overlapping uses of the same clips sound
+    // like different people. Restores the source's pitch afterward. PlayOneShot can't carry a
+    // per-shot pitch, so we set it on the source around the call; overlapping cries on ONE source
+    // will share whatever pitch was last set, which is why a chorus really wants each unit to have
+    // its own AudioSource (each unit plays its own cry on its own source here).
+    private void PlayVoiceWithPitchVariation(AudioClip clip, float volume)
+    {
+        if (audioSource != null)
+        {
+            audioSource.pitch = Random.Range(1f - replyCryPitchVariation, 1f + replyCryPitchVariation);
+            audioSource.PlayOneShot(clip, volume);
+            audioSource.pitch = 1f; // restore for non-voice sounds (gunshots/reload) on this source
+        }
+        else
+        {
+            AudioSource.PlayClipAtPoint(clip, transform.position, volume);
+        }
+    }
+
+    // Occasional individual combat cry. Called from active-combat states; self-limits via a
+    // per-unit cooldown plus a random chance so cries are sporadic, not metronomic, and don't
+    // all fire together. Allies only (gated on spottedAudioTag, same side as the other cries).
+    private void TryPlayCombatBattleCry()
+    {
+        if (battleCryCombatSounds == null || battleCryCombatSounds.Length == 0) return;
+        if (!CompareTag(spottedAudioTag)) return;
+        if (Time.time < nextBattleCryTime) return;
+
+        // Schedule the next eligibility window regardless of whether this one actually fires,
+        // so a failed chance roll doesn't retry every single frame.
+        nextBattleCryTime = Time.time + Random.Range(battleCryMinInterval, battleCryMaxInterval);
+
+        if (Random.value > battleCryChance) return;
+
+        AudioClip clip = battleCryCombatSounds[Random.Range(0, battleCryCombatSounds.Length)];
+        if (clip == null) return;
+
+        PlayVoiceWithPitchVariation(clip, battleCryVolume);
     }
 
     private void BroadcastAlert(Transform target)
@@ -1197,6 +1403,10 @@ public class EnemyAI : MonoBehaviour
         if (behaviorRoutine != null) StopCoroutine(behaviorRoutine);
         ActiveEnemies.Remove(this);
 
+        // Notify listeners (e.g. GameOutcomeManager) after removal, so any living-count check they
+        // run sees the accurate post-death count. Captured tag in case the object is destroyed.
+        OnAnyUnitDied?.Invoke(gameObject.tag);
+
         if (audioSource != null && deathSounds != null && deathSounds.Length > 0)
         {
             AudioClip clip = deathSounds[Random.Range(0, deathSounds.Length)];
@@ -1211,7 +1421,36 @@ public class EnemyAI : MonoBehaviour
         SetRagdollPhysicsEnabled(true);
         MoveRagdollToCorpseLayer();
 
+        // Let the ragdoll flop and settle on the ground, then switch off all its colliders so the
+        // corpse rests as pure visual mesh with no collision at all. The corpse-layer move already
+        // stops it colliding with living units during the flop (via the layer collision matrix);
+        // this removes collision entirely once it's down. Runs on this object, which lives until
+        // ragdollDisappearDelay, so keep the settle delay shorter than that.
+        StartCoroutine(DisableCorpseCollidersAfterSettle());
+
         Destroy(gameObject, ragdollDisappearDelay);
+    }
+
+    private IEnumerator DisableCorpseCollidersAfterSettle()
+    {
+        if (corpseColliderSettleDelay > 0f) yield return new WaitForSeconds(corpseColliderSettleDelay);
+
+        // Turn off every ragdoll collider (and the body capsule, if it somehow survived). Also
+        // make the ragdoll rigidbodies kinematic so nothing keeps simulating them once they have
+        // no colliders - otherwise a stray force could drift the now-collisionless bones.
+        foreach (var col in ragdollColliders)
+        {
+            if (col != null) col.enabled = false;
+        }
+        if (bodyCapsule != null) bodyCapsule.enabled = false;
+
+        foreach (var rb in ragdollRigidbodies)
+        {
+            if (rb == null) continue;
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            rb.isKinematic = true;
+        }
     }
 
     private void MoveRagdollToCorpseLayer()
@@ -1231,6 +1470,56 @@ public class EnemyAI : MonoBehaviour
             if (col == null) continue;
             col.gameObject.layer = corpseLayer;
         }
+
+        if (corpseSetupDiagnostics) LogCorpseSetupDiagnostics(corpseLayer);
+    }
+
+    // One-time-per-death report of whether the Corpse layer + collision matrix are set up so a
+    // corpse actually passes through living units. Reads Physics.GetIgnoreLayerCollision, which is
+    // exactly what the Project Settings > Physics matrix checkboxes control, so it tells you the
+    // real runtime state rather than what you think the matrix says.
+    private void LogCorpseSetupDiagnostics(int corpseLayer)
+    {
+        // Find which layers the living units are actually on, by sampling active units of both tags.
+        var livingLayers = new System.Collections.Generic.HashSet<int>();
+        foreach (var other in ActiveEnemies)
+        {
+            if (other != null) livingLayers.Add(other.gameObject.layer);
+        }
+        var player = FindObjectOfType<FirstPersonController>();
+        if (player != null) livingLayers.Add(player.gameObject.layer);
+
+        if (livingLayers.Count == 0)
+        {
+            Debug.LogWarning("[CorpseSetup] Couldn't sample any living units to check the matrix against " +
+                "(everyone dead, or no FirstPersonController found). Re-check with units alive.", this);
+            return;
+        }
+
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        sb.AppendLine($"[CorpseSetup] Corpse layer = '{corpseLayerName}' (index {corpseLayer}).");
+        bool allGood = true;
+
+        foreach (int layer in livingLayers)
+        {
+            string layerName = LayerMask.LayerToName(layer);
+            // true == the two layers are set to IGNORE each other == corpse passes through == GOOD.
+            bool ignored = Physics.GetIgnoreLayerCollision(corpseLayer, layer);
+            sb.AppendLine($"   vs living layer '{(string.IsNullOrEmpty(layerName) ? layer.ToString() : layerName)}' (index {layer}): " +
+                          $"{(ignored ? "IGNORED (good - corpse passes through)" : "COLLIDING (BAD - uncheck this pair in Physics matrix)")}");
+            if (!ignored) allGood = false;
+        }
+
+        // Also flag the classic mistake: living units sitting on the Default layer, which usually
+        // also collides with everything and is easy to forget in the matrix.
+        if (livingLayers.Contains(0))
+        {
+            sb.AppendLine("   NOTE: at least one living unit is on the 'Default' layer. Put the player and " +
+                          "troops on dedicated Player/NPC layers so you can cleanly uncheck them against Corpse.");
+        }
+
+        if (allGood) Debug.Log(sb.ToString().TrimEnd(), this);
+        else Debug.LogWarning(sb.ToString().TrimEnd() + "\n=> Fix: Edit > Project Settings > Physics, and UNCHECK each pair marked BAD above.", this);
     }
 
     private IEnumerator WaitUntilInState(string stateName, int layer = 0)
@@ -1396,6 +1685,18 @@ public class EnemyAI : MonoBehaviour
         return !Physics.Linecast(eye, targetPoint, lineOfSightBlockers);
     }
 
+    // True if the collider carries any of this unit's target tags. Centralizes the multi-tag
+    // check so every "is this an enemy?" test (targeting, contested-point checks) stays consistent.
+    private bool IsHostile(Component c)
+    {
+        if (c == null || targetTags == null) return false;
+        for (int i = 0; i < targetTags.Length; i++)
+        {
+            if (!string.IsNullOrEmpty(targetTags[i]) && c.CompareTag(targetTags[i])) return true;
+        }
+        return false;
+    }
+
     private Transform FindTarget()
     {
         Collider[] hits = Physics.OverlapSphere(transform.position, detectionRadius);
@@ -1404,7 +1705,7 @@ public class EnemyAI : MonoBehaviour
 
         foreach (var hit in hits)
         {
-            if (!hit.CompareTag(targetTag)) continue;
+            if (!IsHostile(hit)) continue;
 
             Vector3 toTarget = hit.transform.position - transform.position;
 
@@ -1465,16 +1766,31 @@ public class EnemyAI : MonoBehaviour
     {
         if (agent == null || agent.pathPending || agent.remainingDistance < agent.stoppingDistance) return;
 
-        Vector3 dir = agent.desiredVelocity;
+        Vector3 pathDir = agent.desiredVelocity;
+        pathDir.y = 0f;
+
+        if (pathDir.sqrMagnitude < 0.01f) return;
+        pathDir.Normalize();
+
+        // NavMeshAgent's own local avoidance can't reliably steer around allies here (updatePosition
+        // is false and OnAnimatorMove overwrites agent.nextPosition from root motion each frame, so
+        // desiredVelocity basically ignores neighbours). We blend in a manual separation push - but
+        // it must only NUDGE the heading, never dominate it. Previously the raw, uncapped separation
+        // sum (which grows with every crowded neighbour) could exceed the path direction and swing
+        // the heading sideways or backwards; moving that way reshuffled the neighbours, which swung
+        // it again next frame - a feedback loop that made clustered units run in circles until they
+        // happened to drift clear. Clamping the push to a fraction of the (unit-length) path
+        // direction, then rejecting any backward result, keeps the path primary and stops the spin.
+        Vector3 separation = ComputeAllySeparation() * allyAvoidanceStrength;
+        float maxNudge = 0.75f; // separation can bend heading up to this, but path stays dominant
+        if (separation.magnitude > maxNudge) separation = separation.normalized * maxNudge;
+
+        Vector3 dir = pathDir + separation;
         dir.y = 0f;
 
-        // NavMeshAgent's own local avoidance can't reliably steer around allies here: since
-        // updatePosition is false and OnAnimatorMove overwrites agent.nextPosition from root
-        // motion every frame, the avoidance solver's internal simulated position never evolves
-        // naturally, so desiredVelocity ends up basically ignoring nearby agents and just points
-        // straight along the path. Blend in a manual separation push so units actually react to
-        // allies that get too close, in real time, not just when picking a destination.
-        dir += ComputeAllySeparation() * allyAvoidanceStrength;
+        // Never let the blended heading point against the path - if it does, drop separation and
+        // just follow the path this frame (the unit will clear the crowd by moving forward anyway).
+        if (Vector3.Dot(dir, pathDir) <= 0f) dir = pathDir;
 
         if (dir.sqrMagnitude < 0.01f) return;
 

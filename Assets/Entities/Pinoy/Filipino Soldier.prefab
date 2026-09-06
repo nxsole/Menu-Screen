@@ -435,6 +435,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 070ad5392ab21cd44b00d2cf56c9d28c, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1526921190209894336}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 070ad5392ab21cd44b00d2cf56c9d28c, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 8909343285379241779}
     - targetCorrespondingSourceObject: {fileID: 1082271958561512970, guid: 070ad5392ab21cd44b00d2cf56c9d28c, type: 3}
       insertIndex: -1
       addedObject: {fileID: 2899433387812290301}
@@ -1378,7 +1381,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Enemy
   targetTag: Enemy
-  detectionRadius: 100
+  detectionRadius: 25
   fieldOfViewAngle: 360
   lineOfSightBlockers:
     serializedVersion: 2
@@ -1622,6 +1625,18 @@ AudioSource:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
+--- !u!114 &8909343285379241779
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7016849834429641255}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: abed63ce0b1e7184ab1025a1d9dbfa5e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::pathfollower
 --- !u!1 &7108002864400568700 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 1082271958561512970, guid: 070ad5392ab21cd44b00d2cf56c9d28c, type: 3}

@@ -1206,7 +1206,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Enemy
   targetTag: Ally
-  detectionRadius: 100
+  detectionRadius: 25
   fieldOfViewAngle: 360
   lineOfSightBlockers:
     serializedVersion: 2
