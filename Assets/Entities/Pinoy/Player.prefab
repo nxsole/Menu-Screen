@@ -1084,6 +1084,12 @@ MonoBehaviour:
   interactionPromptCanvasGroup: {fileID: 0}
   interactionPromptText: {fileID: 0}
   interactionPromptMessage: Press E to pick up
+  enableHighlight: 1
+  highlightEmission: {r: 1, g: 0.85, b: 0.3, a: 1}
+  highlightIntensity: 1.2
+  highlightPulseSpeed: 3
+  trackPromptToWeapon: 1
+  promptScreenOffset: {x: 0, y: 40}
   maxAmmo: 1
   weaponRange: 100
   reloadDuration: 2.4
@@ -1136,6 +1142,7 @@ MonoBehaviour:
   - '"Regardless of the color of their skin, all people are equal; one may be superior
     in knowledge, wealth, or beauty... but cannot be superior in being human."'
   - "\"May mas malaki tayong kalaban sa mga Amerikano\u2014ang ating sarili.\" "
+  debugPickupLogging: 1
 --- !u!82 &6372255278744020772
 AudioSource:
   m_ObjectHideFlags: 0
