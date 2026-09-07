@@ -6,6 +6,9 @@ public class PauseManager : MonoBehaviour
     [Header("UI Reference")]
     public GameObject pauseMenuPanel;
 
+    [Tooltip("Drag your Outcome manager GameObject here to disable its UI raycast block during pause")]
+    public GameObject outcomeManagerUI;
+
     [Header("Player Control Reference")]
     public MonoBehaviour playerController;
 
@@ -36,19 +39,20 @@ public class PauseManager : MonoBehaviour
     public void PauseGame()
     {
         pauseMenuPanel.SetActive(true);
+
+        if (outcomeManagerUI != null)
+            outcomeManagerUI.SetActive(false);
+
         Time.timeScale = 0f; // Freeze game speed
 
-        // Pause background music explicitly
         if (backgroundMusic != null && backgroundMusic.isPlaying)
         {
             backgroundMusic.Pause();
         }
 
-        // Unlock and show cursor
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
 
-        // Disable player look/movement script
         if (playerController != null)
             playerController.enabled = false;
 
@@ -58,23 +62,33 @@ public class PauseManager : MonoBehaviour
     public void ResumeGame()
     {
         pauseMenuPanel.SetActive(false);
+
+        if (outcomeManagerUI != null)
+            outcomeManagerUI.SetActive(true);
+
         Time.timeScale = 1f; // Restore normal speed
 
-        // Resume background music from where it stopped
         if (backgroundMusic != null)
         {
             backgroundMusic.UnPause();
         }
 
-        // Hide and lock cursor
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
 
-        // Re-enable player look/movement script
         if (playerController != null)
             playerController.enabled = true;
 
         isPaused = false;
+    }
+
+    public void RestartLevel()
+    {
+        // Unfreeze time scale before reloading the scene
+        Time.timeScale = 1f;
+
+        // Reload the currently active scene (Level 1)
+        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
     }
 
     public void QuitToMainMenu()
