@@ -148,6 +148,15 @@ public class FirstPersonController : MonoBehaviour
     [SerializeField] private TMP_Text respawnTimerText;
     [SerializeField] private AudioLowPassFilter audioLowPassFilter;
     [SerializeField] private float muffledCutoffFrequency = 800f;
+
+    [Header("Respawn / Game Over")]
+    [Tooltip("How many times the player may respawn before a death triggers the lose sequence. 1 = first death respawns, second death is game over.")]
+    [SerializeField] private int allowedRespawns = 1;
+    [Tooltip("Seconds the death screen holds on the FINAL death before the lose sequence takes over.")]
+    [SerializeField] private float finalDeathHold = 1.5f;
+    [Tooltip("The scene's GameOutcomeManager, used to play the lose sequence on the final death. Found automatically if left empty.")]
+    [SerializeField] private GameOutcomeManager outcomeManager;
+    private int deathCount = 0;
     [SerializeField] private float normalCutoffFrequency = 22000f;
 
     [Header("Death Audio")]
@@ -848,8 +857,30 @@ public class FirstPersonController : MonoBehaviour
     {
         isDead = true;
         isReloading = false;
+        deathCount++;
 
         ShowDeathScreen();
+
+        // Out of respawns -> this is game over. Hold the death screen briefly so the death reads,
+        // then hand off to the outcome manager's lose sequence (typewriter + menu). We do NOT
+        // respawn or clear isDead - the player stays down and control never returns.
+        if (deathCount > allowedRespawns)
+        {
+            if (outcomeManager == null) outcomeManager = FindObjectOfType<GameOutcomeManager>();
+
+            yield return new WaitForSeconds(finalDeathHold);
+
+            if (outcomeManager != null)
+            {
+                HideDeathScreen(); // the lose sequence draws its own black + text
+                outcomeManager.TriggerLose();
+            }
+            else
+            {
+                Debug.LogWarning("[FirstPersonController] No GameOutcomeManager found - can't play lose sequence on final death. Player will just stay on the death screen.", this);
+            }
+            yield break;
+        }
 
         float timer = respawnDelay;
         while (timer > 0f)
