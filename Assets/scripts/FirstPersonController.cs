@@ -89,9 +89,15 @@ public class FirstPersonController : MonoBehaviour
     private bool isReloading = false;
 
     [Header("Aiming (ADS) & Sway")]
+    [Tooltip("The transform the AIM/SWAY movement is applied to. This must NOT be the same GameObject as the weapon Animator - if it is, the Animator and this script fight over localPosition and the weapon sinks. Make an empty parent 'AimHolder' between the weapon holder and the animated weapon, put the weapon (with its Animator) as its child, and assign the AimHolder here. If left empty, falls back to weaponTransform (the old, buggy behaviour).")]
+    [SerializeField] private Transform aimHolder;
+    [Tooltip("The animated weapon object (has the Animator). Activated/deactivated on pickup. Its OWN localPosition is left entirely to the Animator now.")]
     [SerializeField] private Transform weaponTransform;
     [SerializeField] private Vector3 hipFirePosition;
     [SerializeField] private Vector3 aimPosition;
+    [Tooltip("Logs the weapon's local position each time you start/stop aiming, to diagnose position drift. Turn off once fixed.")]
+    [SerializeField] private bool debugAimLogging = false;
+    private bool wasAimingLastFrame = false;
     [SerializeField] private float aimSpeed = 10f;
 
     [Header("Mouse Sway")]
@@ -614,9 +620,22 @@ public class FirstPersonController : MonoBehaviour
 
     private void HandleAimingAndSway()
     {
-        if (weaponTransform == null) return;
+        // Apply aim/sway to the holder, NOT the animated weapon. If both this script and the
+        // Animator write the same transform's localPosition, they fight and the weapon drifts
+        // downward. aimHolder should be a parent of the animated weapon; the Animator then owns
+        // the weapon's own localPosition and this owns the holder's. Fall back to weaponTransform
+        // only if no holder is assigned (preserves old behaviour rather than doing nothing).
+        Transform moveTarget = aimHolder != null ? aimHolder : weaponTransform;
+        if (moveTarget == null) return;
 
         bool isAiming = Input.GetButton("Fire2") && !isReloading;
+
+        if (debugAimLogging && isAiming != wasAimingLastFrame)
+        {
+            Debug.Log($"[Aim] {(isAiming ? "START" : "STOP")} aim. moveTarget.localPosition = {moveTarget.localPosition} | aimPosition={aimPosition} hipFirePosition={hipFirePosition}", this);
+            wasAimingLastFrame = isAiming;
+        }
+
         Vector3 baseTargetPosition = isAiming ? aimPosition : hipFirePosition;
 
         float currentSwayMultiplier = isAiming ? aimSwayMultiplier : 1f;
@@ -634,7 +653,7 @@ public class FirstPersonController : MonoBehaviour
 
         Vector3 targetPosition = baseTargetPosition + new Vector3(swayX + driftX, swayY + driftY, 0f);
 
-        weaponTransform.localPosition = Vector3.Lerp(weaponTransform.localPosition, targetPosition, Time.deltaTime * aimSpeed);
+        moveTarget.localPosition = Vector3.Lerp(moveTarget.localPosition, targetPosition, Time.deltaTime * aimSpeed);
     }
 
     private void HandleShootingAndReloading()
